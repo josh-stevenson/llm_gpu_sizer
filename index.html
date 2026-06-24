@@ -3,16 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <title>vLLM K8s Cluster Sizer</title>
-    <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.31.1/build/stlite.js"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.31.1/build/stlite.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@0.77.0/build/style.css"/>
   </head>
   <body>
     <div id="root"></div>
     
-    <script>
-      stlite.mount(
-        {
-          mainScriptData: `
+    <script type="module">
+      import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@0.77.0/build/stlite.js";
+      
+      mount(
+        `
 
 import streamlit as st
 
@@ -271,9 +271,7 @@ else:
     st.success("### ✅ Production Ready\nAll models fit within VRAM limits, Tensor Parallelism boundaries, and cluster topology.")
     st.write(f"**Cluster Utilization:** {total_gpus_requested} of {effective_cluster_gpus} schedulable GPUs allocated.")
 
-
-`
-        },
+`,
         document.getElementById("root")
       );
     </script>
