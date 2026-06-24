@@ -13,7 +13,6 @@
       
       mount(
         `
-
 import streamlit as st
 
 # --- Page Configuration ---
@@ -92,9 +91,9 @@ with st.sidebar:
     effective_gpu_bandwidth = target_gpu_bandwidth / vgpu_replicas 
     
     if gpu_mode == "vGPU (Time-Slicing)":
-        st.info(f"**Effective vGPU Capacity:**\n\n{effective_cluster_gpus}x Virtual GPUs\n\n({effective_gpu_vram:.1f} GB VRAM Profile per vGPU)\n\n(~{effective_gpu_bandwidth:.0f} GB/s Bandwidth per vGPU)")
+        st.info(f"**Effective vGPU Capacity:**\\n\\n{effective_cluster_gpus}x Virtual GPUs\\n\\n({effective_gpu_vram:.1f} GB VRAM Profile per vGPU)\\n\\n(~{effective_gpu_bandwidth:.0f} GB/s Bandwidth per vGPU)")
     else:
-        st.info(f"**Total Cluster Capacity:**\n\n{effective_cluster_gpus}x {target_gpu}\n\n({effective_cluster_gpus * effective_gpu_vram} GB Total VRAM)")
+        st.info(f"**Total Cluster Capacity:**\\n\\n{effective_cluster_gpus}x {target_gpu}\\n\\n({effective_cluster_gpus * effective_gpu_vram} GB Total VRAM)")
 
     st.header("3. Deployment Scope")
     num_models = st.slider("Active Models to Host", min_value=1, max_value=4, value=2)
@@ -259,19 +258,18 @@ for m in model_metrics:
 
 # Display Verdict
 if errors:
-    st.error("### ❌ Deployment Failed\nThe Kubernetes scheduler cannot place these workloads due to the following constraints:")
+    st.error("### ❌ Deployment Failed\\nThe Kubernetes scheduler cannot place these workloads due to the following constraints:")
     for e in errors:
         st.write(f"- {e}")
 elif warnings:
-    st.warning("### ⚠️ Deployment Risky\nThe models will schedule, but you are dangerously close to hardware or performance limits:")
+    st.warning("### ⚠️ Deployment Risky\\nThe models will schedule, but you are dangerously close to hardware or performance limits:")
     for w in warnings:
         st.write(f"- {w}")
-    st.success(f"\n**Cluster Utilization:** {total_gpus_requested} of {effective_cluster_gpus} schedulable GPUs allocated.")
+    st.success(f"\\n**Cluster Utilization:** {total_gpus_requested} of {effective_cluster_gpus} schedulable GPUs allocated.")
 else:
-    st.success("### ✅ Production Ready\nAll models fit within VRAM limits, Tensor Parallelism boundaries, and cluster topology.")
+    st.success("### ✅ Production Ready\\nAll models fit within VRAM limits, Tensor Parallelism boundaries, and cluster topology.")
     st.write(f"**Cluster Utilization:** {total_gpus_requested} of {effective_cluster_gpus} schedulable GPUs allocated.")
-
-`,
+        `,
         document.getElementById("root")
       );
     </script>
