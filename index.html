@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>vLLM K8s Cluster Sizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.31.1/build/stlite.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.31.1/build/stlite.css"/>
+  </head>
+  <body>
+    <div id="root"></div>
+    
+    <script>
+      stlite.mount(
+        {
+          mainScriptData: `
+
+import streamlit as st
+
+# --- Page Configuration ---
+st.set_page_config(page_title="vLLM K8s Cluster Sizer & Profiler", layout="wide")
+
+# --- Static Data ---
+# Dictionary of common inference GPUs and their hard memory limits (GB)
+GPUS = {
+    "NVIDIA L40S": 48,
+    "NVIDIA RTX 6000 Ada": 48,
+    "NVIDIA RTX Pro 6000 (Blackwell)": 96,
+    "NVIDIA A100 (40 GB)": 40,
+    "NVIDIA A100 (80 GB)": 80,
+    "NVIDIA H100": 80,
+    "NVIDIA H200": 141,
+    "NVIDIA B300": 288,
+    "AMD MI300X": 192,
+    "AMD MI325X": 256,
+    "AMD MI350X": 288
+}
+
+# Peak Memory Bandwidth (GB/s) for ITL Calculations
+GPU_BANDWIDTH = {
+    "NVIDIA L40S": 864,
+    "NVIDIA RTX 6000 Ada": 960,
+    "NVIDIA RTX Pro 6000 (Blackwell)": 1152, 
+    "NVIDIA A100 (40 GB)": 1555,
+    "NVIDIA A100 (80 GB)": 1939,
+    "NVIDIA H100": 3350,
+    "NVIDIA H200": 4800,
+    "NVIDIA B300": 8000,
+    "AMD MI300X": 5300,
+    "AMD MI325X": 6000,
+    "AMD MI350X": 8000
+}
+
+# --- UI Header ---
+st.title("vLLM K8s Cluster Sizer & Profiler ☸️")
+st.markdown("""
+Plan your multi-model vLLM deployment across a Kubernetes cluster. This tool checks standard VRAM math, 
+Kubernetes scheduling constraints, and estimates latency metrics based on memory bandwidth and hardware profiling.
+""")
+st.divider()
+
+# --- Global Settings (Sidebar) ---
+with st.sidebar:
+    st.header("1. Cluster Topology")
+    num_nodes = st.number_input("Number of Worker Nodes", min_value=1, value=3, step=1)
+    gpus_per_node = st.number_input("GPUs per Node", min_value=1, value=4, step=1)
+    target_gpu = st.selectbox("GPU Architecture", list(GPUS.keys()), index=5) # Default H100
+    
+    physical_cluster_gpus = num_nodes * gpus_per_node
+    physical_gpu_vram = GPUS[target_gpu]
+    target_gpu_bandwidth = GPU_BANDWIDTH[target_gpu]
+    
+    st.header("2. GPU Operator Mode")
+    gpu_mode = st.radio(
+        "GPU Allocation Strategy", 
+        ["GPU Passthrough", "MIG (Multi-Instance GPU)", "vGPU (Time-Slicing)"],
+        help="Passthrough gives full GPUs to pods. MIG physically partitions GPUs. vGPU shares them via software."
+    )
+    
+    # vGPU Profile Logic
+    vgpu_replicas = 1
+    if gpu_mode == "vGPU (Time-Slicing)":
+        vgpu_replicas = st.number_input(
+            "vGPU Replicas (Slices per Physical GPU)", 
+            min_value=2, value=4, step=1,
+            help="How many virtual GPUs the operator creates per physical GPU."
+        )
+    
+    # Calculate effective capacity based on mode
+    effective_cluster_gpus = physical_cluster_gpus * vgpu_replicas
+    effective_gpu_vram = physical_gpu_vram / vgpu_replicas
+    # vGPU also inherently slices available memory bandwidth
+    effective_gpu_bandwidth = target_gpu_bandwidth / vgpu_replicas 
+    
+    if gpu_mode == "vGPU (Time-Slicing)":
+        st.info(f"**Effective vGPU Capacity:**\n\n{effective_cluster_gpus}x Virtual GPUs\n\n({effective_gpu_vram:.1f} GB VRAM Profile per vGPU)\n\n(~{effective_gpu_bandwidth:.0f} GB/s Bandwidth per vGPU)")
+    else:
+        st.info(f"**Total Cluster Capacity:**\n\n{effective_cluster_gpus}x {target_gpu}\n\n({effective_cluster_gpus * effective_gpu_vram} GB Total VRAM)")
+
+    st.header("3. Deployment Scope")
+    num_models = st.slider("Active Models to Host", min_value=1, max_value=4, value=2)
+
+# --- Model Configurations (Tabs) ---
+tabs = st.tabs([f"🤖 Model {i+1}" for i in range(num_models)])
+
+model_metrics = []
+
+for i in range(num_models):
+    with tabs[i]:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.subheader("Model Specs")
+            params_b = st.number_input("Parameters (Billions)", min_value=1.0, value=8.0 if i > 0 else 70.0, step=1.0, key=f"params_{i}")
+            precision = st.selectbox("Weight Precision", ["FP16/BF16", "FP8/INT8", "INT4 (AWQ/GPTQ)"], index=0 if i > 0 else 1, key=f"prec_{i}")
+            
+        with col2:
+            st.subheader("Workload & I/O")
+            input_tokens = st.number_input("Input Tokens (Prompt)", min_value=10, value=2000 if i > 0 else 4000, step=500, key=f"in_tok_{i}")
+            output_tokens = st.number_input("Output Tokens (Generation)", min_value=10, value=500 if i > 0 else 1000, step=100, key=f"out_tok_{i}")
+            concurrency = st.number_input("Concurrency (Batch Size)", min_value=1, value=5 if i > 0 else 10, step=1, key=f"conc_{i}")
+            mbu = st.slider("Assumed MBU", min_value=0.10, max_value=1.00, value=0.60, step=0.05, key=f"mbu_{i}", help="Model Bandwidth Utilization. Closer to 1.0 means higher efficiency at larger batch sizes.")
+            kv_precision = st.selectbox("KV Cache Precision", ["FP16", "FP8"], index=0, key=f"kv_prec_{i}")
+
+        with col3:
+            st.subheader("K8s Scheduling")
+            # TP Degree for this specific model
+            tp_degree = st.number_input(
+                "Tensor Parallelism (GPUs needed)", 
+                min_value=1, value=1 if i > 0 else 2, step=1, key=f"tp_{i}",
+                help="How many GPUs to shard this model across."
+            )
+
+        # --- Base Math ---
+        # 1. Weights
+        if "FP16" in precision:
+            bytes_per_param = 2
+        elif "FP8" in precision:
+            bytes_per_param = 1
+        else:
+            bytes_per_param = 0.5
+        total_weights_gb = params_b * bytes_per_param
+
+        # 2. KV Cache
+        context_len = input_tokens + output_tokens
+        if params_b < 40:
+            kv_multiplier = 0.15 if kv_precision == "FP16" else 0.075
+        else:
+            kv_multiplier = 0.35 if kv_precision == "FP16" else 0.175
+            
+        total_tokens = context_len * concurrency
+        total_kv_gb = (total_tokens * kv_multiplier) / 1024
+        
+        # 3. Overhead (CUDA context per GPU in the TP group)
+        total_overhead_gb = 4.0 * tp_degree
+        
+        # Total VRAM required for this specific model before sharding
+        model_total_vram = total_weights_gb + total_kv_gb + total_overhead_gb
+        
+        # Per-GPU VRAM usage for this model
+        vram_per_gpu_gb = model_total_vram / tp_degree
+        
+        # --- Latency Derivations ---
+        # Inter-Token Latency (ITL) based on MBU and Bandwidth
+        # Note: Tensor Parallelism effectively aggregates the memory bandwidth of the GPUs in the TP group.
+        total_bandwidth_gbs = effective_gpu_bandwidth * tp_degree
+        itl_seconds = (total_weights_gb + total_kv_gb) / (mbu * total_bandwidth_gbs)
+        itl_ms = itl_seconds * 1000
+        
+        # Time to First Token (TTFT) Empirical Linear Regression Estimate
+        ttft_seconds = (0.0001539 * input_tokens) + 0.0218
+        ttft_ms = ttft_seconds * 1000
+        
+        # End-to-End Latency (E2E)
+        e2e_seconds = ttft_seconds + (itl_seconds * max(0, output_tokens - 1))
+        
+        # --- Per-Model UI Breakdown ---
+        st.markdown("#### ⚡ Estimated Latency Metrics")
+        lc1, lc2, lc3 = st.columns(3)
+        lc1.metric("Time to First Token (TTFT)", f"{ttft_ms:,.1f} ms")
+        lc2.metric("Inter-Token Latency (ITL)", f"{itl_ms:,.1f} ms/token")
+        lc3.metric("Median Response (E2E)", f"{e2e_seconds:,.2f} sec")
+
+        st.markdown("#### 📊 Per-Model VRAM Breakdown")
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc1.metric("Static Weights", f"{total_weights_gb:,.1f} GB")
+        mc2.metric("Dynamic KV Cache", f"{total_kv_gb:,.1f} GB")
+        mc3.metric("Engine Overhead", f"{total_overhead_gb:,.1f} GB")
+        mc4.metric("Total VRAM Needed", f"{model_total_vram:,.1f} GB")
+        
+        if vram_per_gpu_gb > effective_gpu_vram:
+            st.error(f"**Allocation:** {vram_per_gpu_gb:.1f} GB per GPU across {tp_degree} GPU(s). (Exceeds {target_gpu} capacity!)")
+        else:
+            st.success(f"**Allocation:** {vram_per_gpu_gb:.1f} GB per GPU across {tp_degree} GPU(s).")
+        
+        model_metrics.append({
+            "name": f"Model {i+1}",
+            "tp_degree": tp_degree,
+            "vram_per_gpu": vram_per_gpu_gb,
+            "total_weights": total_weights_gb,
+            "total_kv": total_kv_gb,
+            "total_overhead": total_overhead_gb,
+            "total_vram_needed": model_total_vram
+        })
+
+# --- Aggregation & K8s Diagnostic Engine ---
+st.divider()
+st.header("🌍 Aggregate Cluster Breakdown")
+
+# Aggregate Math
+agg_weights = sum(m["total_weights"] for m in model_metrics)
+agg_kv = sum(m["total_kv"] for m in model_metrics)
+agg_overhead = sum(m["total_overhead"] for m in model_metrics)
+agg_total_vram = sum(m["total_vram_needed"] for m in model_metrics)
+total_gpus_requested = sum(m["tp_degree"] for m in model_metrics)
+
+ac1, ac2, ac3, ac4 = st.columns(4)
+ac1.metric("Cluster Static Weights", f"{agg_weights:,.1f} GB")
+ac2.metric("Cluster KV Cache", f"{agg_kv:,.1f} GB")
+ac3.metric("Cluster Engine Overhead", f"{agg_overhead:,.1f} GB")
+ac4.metric("Total Cluster VRAM", f"{agg_total_vram:,.1f} GB")
+
+st.divider()
+st.header("⚙️ Kubernetes Scheduling Verdict")
+
+# Run Diagnostics
+errors = []
+warnings = []
+
+# 1. Total Capacity Check (Checks against effective GPUs)
+if total_gpus_requested > effective_cluster_gpus:
+    errors.append(f"**Cluster Capacity Exceeded:** You are requesting {total_gpus_requested} GPUs, but your cluster only has {effective_cluster_gpus} schedulable GPUs.")
+
+# 2. Operator / Interconnect Checks
+if gpu_mode == "MIG (Multi-Instance GPU)":
+    for m in model_metrics:
+        if m["tp_degree"] > 1:
+            errors.append(f"**MIG Conflict ({m['name']}):** Tensor Parallelism ({m['tp_degree']}) is not supported across MIG slices because they lack NVLink.")
+
+if gpu_mode == "vGPU (Time-Slicing)":
+    for m in model_metrics:
+        if m["tp_degree"] > 1:
+            warnings.append(f"**vGPU TP Warning ({m['name']}):** Tensor Parallelism over vGPU slices is highly inefficient due to software time-slicing and lack of direct P2P interconnect. Expect severe latency.")
+
+# 3. Node Affinity / NVLink Constraints (Only matters for physical GPUs)
+if gpu_mode != "vGPU (Time-Slicing)":
+    for m in model_metrics:
+        if m["tp_degree"] > gpus_per_node:
+            errors.append(f"**Anti-Affinity Failure ({m['name']}):** Model requires TP={m['tp_degree']}, but worker nodes only have {gpus_per_node} GPUs. Kubernetes cannot schedule a single pod across multiple nodes.")
+
+# 4. VRAM Limits per GPU (Checks against effective VRAM profile)
+for m in model_metrics:
+    if m["vram_per_gpu"] > effective_gpu_vram:
+        if gpu_mode == "vGPU (Time-Slicing)":
+            errors.append(f"**OOM Risk ({m['name']}):** Requires {m['vram_per_gpu']:.1f} GB, which exceeds your vGPU profile limit of {effective_gpu_vram:.1f} GB. Reduce replicas or use Passthrough.")
+        else:
+            errors.append(f"**OOM Risk ({m['name']}):** Requires {m['vram_per_gpu']:.1f} GB per GPU, which exceeds the {target_gpu}'s {effective_gpu_vram:.1f} GB capacity. Increase Tensor Parallelism or quantize.")
+    elif m["vram_per_gpu"] > (effective_gpu_vram * 0.9):
+        warnings.append(f"**High Memory Pressure ({m['name']}):** Using {m['vram_per_gpu']:.1f} GB of your {effective_gpu_vram:.1f} GB limit. A slight token spike could cause an OOM crash.")
+
+# Display Verdict
+if errors:
+    st.error("### ❌ Deployment Failed\nThe Kubernetes scheduler cannot place these workloads due to the following constraints:")
+    for e in errors:
+        st.write(f"- {e}")
+elif warnings:
+    st.warning("### ⚠️ Deployment Risky\nThe models will schedule, but you are dangerously close to hardware or performance limits:")
+    for w in warnings:
+        st.write(f"- {w}")
+    st.success(f"\n**Cluster Utilization:** {total_gpus_requested} of {effective_cluster_gpus} schedulable GPUs allocated.")
+else:
+    st.success("### ✅ Production Ready\nAll models fit within VRAM limits, Tensor Parallelism boundaries, and cluster topology.")
+    st.write(f"**Cluster Utilization:** {total_gpus_requested} of {effective_cluster_gpus} schedulable GPUs allocated.")
+
+
+`
+        },
+        document.getElementById("root")
+      );
+    </script>
+  </body>
+</html>
